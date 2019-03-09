@@ -68,11 +68,12 @@ int GVCnt;
 
 int zs;
 float SunLight;
-float TraceK,SkyTraceK;
+float TraceK,SkyTraceK,FogYGrad,FogYBase;;
 int SunScrX, SunScrY;
 int SkySumR, SkySumG, SkySumB;
 int LowHardMemory;
 int lsw;
+int vFogT[1024];
 BOOL SmallFont;
 
 
@@ -101,6 +102,14 @@ void conv_pic555(TPicture &pic)
 }
 
 
+void CalcFogLevel_Gradient(Vector3d v)
+{
+  FogYBase =  CalcFogLevel(v);	  
+  if (FogYBase>0) {
+   v.y+=800;
+   FogYGrad = (CalcFogLevel(v) - FogYBase) / 800.f;      
+  } else FogYGrad=0;
+}
 
 
 void Hardware_ZBuffer(BOOL bl)
@@ -118,8 +127,10 @@ void d3dClearBuffers()
   DDBLTFX ddbltfx;
 
   ddbltfx.dwSize = sizeof( DDBLTFX );
+  SkyR = 0x60; SkyG = 0x60; SkyB = 0x65;
   if (VMFORMAT565) ddbltfx.dwFillColor = (SkyR>>3)*32*32*2 + (SkyG>>2)*32 + (SkyB>>3);
-              else ddbltfx.dwFillColor = (SkyR>>3)*32*32   + (SkyG>>3)*32 + (SkyB>>3);
+              else ddbltfx.dwFillColor = (SkyR>>3)*32*32   + (SkyG>>3)*32 + (SkyB>>3);  
+
   lpddBack->Blt( NULL, NULL, NULL, DDBLT_COLORFILL | DDBLT_WAIT, &ddbltfx );  
    
   ddbltfx.dwSize = sizeof( DDBLTFX );
@@ -166,6 +177,19 @@ void d3dStartBufferG()
    lpProcessVertices++;
    
    lpInstructionG = (LPD3DINSTRUCTION)lpProcessVertices;
+
+   if (FOGENABLE) {
+	 lpInstructionG->bOpcode = D3DOP_STATERENDER;
+     lpInstructionG->bSize = sizeof(D3DSTATE);
+     lpInstructionG->wCount = 1;
+     lpInstructionG++;
+     lpState = (LPD3DSTATE)lpInstructionG;
+     lpState->drstRenderStateType = D3DRENDERSTATE_FOGCOLOR;
+     if (UNDERWATER) lpState->dwArg[0] = 0x00004560;	
+	            else lpState->dwArg[0] = 0x00606065;
+     lpState++;	 
+     lpInstructionG = (LPD3DINSTRUCTION)lpState;     
+   }
       
 }
 
@@ -277,7 +301,7 @@ void d3dFlushBuffer(int fproc1, int fproc2)
     lpState->drstRenderStateType = D3DRENDERSTATE_TEXTUREMIN;
     lpState->dwArg[0] = D3DFILTER_NEAREST;
     lpState++;
-	
+
 	lpInstruction = (LPD3DINSTRUCTION)lpState;
 
 	lpInstruction->bOpcode = D3DOP_TRIANGLE;
@@ -329,7 +353,7 @@ void d3dFlushBuffer(int fproc1, int fproc2)
    lpd3dExecuteBuffer->Unlock( );
    
    hRes = lpd3dDevice->Execute(lpd3dExecuteBuffer, lpd3dViewport, D3DEXECUTE_UNCLIPPED);
-   if (FAILED(hRes)) DoHalt("Error execute buffer");   
+   //if (FAILED(hRes)) DoHalt("Error execute buffer");   
    dFacesCount+=fproc1+fproc2;
 }
 
@@ -383,7 +407,7 @@ HRESULT FillExecuteBuffer_State( LPDIRECT3DEXECUTEBUFFER lpd3dExecuteBuffer)
    lpInstruction = (LPD3DINSTRUCTION) ((LPD3DTLVERTEX)d3dExeBufDesc.lpData + 1024*3);
    lpInstruction->bOpcode = D3DOP_STATERENDER;
    lpInstruction->bSize = sizeof(D3DSTATE);
-   lpInstruction->wCount = 21;
+   lpInstruction->wCount = 22;
    lpInstruction++;
    lpState = (LPD3DSTATE)lpInstruction;
 
@@ -461,7 +485,11 @@ HRESULT FillExecuteBuffer_State( LPDIRECT3DEXECUTEBUFFER lpd3dExecuteBuffer)
    lpState++;
 
    lpState->drstRenderStateType = D3DRENDERSTATE_FOGENABLE;
-   lpState->dwArg[0] = FALSE;
+   lpState->dwArg[0] = FOGENABLE;
+   lpState++;
+
+   lpState->drstRenderStateType = D3DRENDERSTATE_FOGCOLOR;
+   lpState->dwArg[0] = 0x00606070;
    lpState++;
 
    lpState->drstRenderStateType = D3DRENDERSTATE_SRCBLEND;
@@ -786,11 +814,30 @@ void Activate3DHardware()
     if (FAILED(hRes))  DoHalt("CreateScene Failed.\n");   
 
 	d3dDetectCaps();	
+
+
+   LPDIRECTDRAWCOLORCONTROL lpCC;
+   HRESULT hres = lpDD->QueryInterface( IID_IDirectDrawColorControl, (LPVOID*)&lpCC);
+
+   wsprintf(logt, "%X", hres);
+   PrintLog(logt);
+
+   if (lpCC) {
+	   PrintLog("ColorControl Started.");
+	   DDCOLORCONTROL ColorControl;
+	   ColorControl.dwSize = sizeof(ColorControl);
+	   ColorControl.dwFlags = DDCOLOR_GAMMA;
+	   ColorControl.lGamma = 200;
+	   lpCC->SetColorControls(&ColorControl);
+   }
+
 	
 	hRes = lpd3dDevice->BeginScene( );
 
 	if (OptText==0) LOWRESTX = TRUE;
     if (OptText==1) LOWRESTX = FALSE;
+	if (OptText==2) LOWRESTX = FALSE;
+    d3dMemLoaded = 0;
 	                   
     D3DACTIVE = TRUE;    
 	
@@ -806,7 +853,7 @@ void ResetTextureMap()
   d3dEndBufferG();
 
   d3dMemUsageCount = 0;
-  d3dMemLoaded = 0;
+  //d3dMemLoaded = 0;
   d3dLastTexture = d3dmemmapsize+1;
   for (int m=0; m<d3dmemmapsize+2; m++) {
       d3dMemMap[m].lastused    = 0;
@@ -1051,8 +1098,7 @@ float GetTraceK(int x, int y)
   DDSURFACEDESC ddsd;	 
   ZeroMemory( &ddsd, sizeof(DDSURFACEDESC) );
   ddsd.dwSize = sizeof(DDSURFACEDESC);
-  if( lpddZBuffer->Lock( NULL, &ddsd, DDLOCK_WAIT, NULL ) != DD_OK ) {
-	  MessageBeep(0xFFFFFFFF);
+  if( lpddZBuffer->Lock( NULL, &ddsd, DDLOCK_WAIT, NULL ) != DD_OK ) {	  
 	  return 0;
   }
 
@@ -1104,8 +1150,7 @@ float GetSkyK(int x, int y)
   DDSURFACEDESC ddsd;	 
   ZeroMemory( &ddsd, sizeof(DDSURFACEDESC) );
   ddsd.dwSize = sizeof(DDSURFACEDESC);
-  if( lpddBack->Lock( NULL, &ddsd, DDLOCK_WAIT, NULL ) != DD_OK ) {
-	  MessageBeep(0xFFFFFFFF);
+  if( lpddBack->Lock( NULL, &ddsd, DDLOCK_WAIT, NULL ) != DD_OK ) {	  
 	  return 0;
   }
   
@@ -1140,19 +1185,46 @@ float GetSkyK(int x, int y)
 
 
 
+
+
+
 void TryHiResTx()
 {
-  
+  int UsedMem = 0;
+  for (int m=0; m<d3dmemmapsize; m++) {
+   if (!d3dMemMap[m].cpuaddr) break;   
+   if (d3dMemMap[m].lastused+2>=d3dMemUsageCount)
+      UsedMem+= d3dMemMap[m].size;
+  }
+/*
+  wsprintf(logt, "TOTALL: %d USED: %d", d3dTexturesMem, UsedMem);
+  AddMessage(logt);
+*/
+  if (UsedMem*4 < (int)d3dTexturesMem)
+    LOWRESTX = FALSE;  
 }
-
-
 
 
 void ShowVideo()
 {	
+	/*
   char t[128];
   wsprintf(t, "T-mem loaded: %dK", d3dMemLoaded >> 10);
   if (d3dMemLoaded) AddMessage(t);
+  */
+
+   if (d3dMemLoaded > 200*1024) LowHardMemory++;
+                           else LowHardMemory=0;
+   if (LowHardMemory>2) {
+	   LOWRESTX = TRUE;
+	   LowHardMemory = 0;  }
+
+   if (OptText==0) LOWRESTX = TRUE;
+   if (OptText==1) LOWRESTX = FALSE;
+   if (OptText==2)
+      if (LOWRESTX && (Takt & 63)==0) TryHiResTx();
+
+
 
   if (UNDERWATER)
 	  RenderFSRect(0x90004050);
@@ -1396,6 +1468,7 @@ void ClipVector(CLIPPLANE& C, int vn)
    hleft.tx = cp[vn].tx + ((cp[vleft].tx - cp[vn].tx) * lc);
    hleft.ty = cp[vn].ty + ((cp[vleft].ty - cp[vn].ty) * lc);
    hleft.ev.Light = cp[vn].ev.Light + (int)((cp[vleft].ev.Light - cp[vn].ev.Light) * lc);   
+   hleft.ev.Fog = cp[vn].ev.Fog + (int)((cp[vleft].ev.Fog - cp[vn].ev.Fog) * lc);
   }
 
   if (s2>0) {
@@ -1409,6 +1482,7 @@ void ClipVector(CLIPPLANE& C, int vn)
    hright.tx = cp[vn].tx + ((cp[vright].tx - cp[vn].tx) * lc);
    hright.ty = cp[vn].ty + ((cp[vright].ty - cp[vn].ty) * lc);
    hright.ev.Light = cp[vn].ev.Light + (int)((cp[vright].ev.Light - cp[vn].ev.Light) * lc);   
+   hright.ev.Fog = cp[vn].ev.Fog + (int)((cp[vright].ev.Fog - cp[vn].ev.Fog) * lc);
   }
 
   if (ClipRes == 0) {
@@ -1606,6 +1680,7 @@ void DrawTPlaneClip(BOOL SECONT)
      lpVertexG->sz       = -8.0f / cp[0].ev.v.z;
      lpVertexG->rhw      = lpVertexG->sz * 0.125f;
      lpVertexG->color    = (int)(255-cp[0].ev.Light*4) * 0x00010101 | (WaterAlphaL<<24);
+	 lpVertexG->specular = (255-(int)cp[0].ev.Fog)<<24;//0x7F000000;
      lpVertexG->tu       = (float)(cp[0].tx) / (128.f*65536.f);
      lpVertexG->tv       = (float)(cp[0].ty) / (128.f*65536.f);
      lpVertexG++;	
@@ -1615,6 +1690,7 @@ void DrawTPlaneClip(BOOL SECONT)
      lpVertexG->sz       = -8.0f / cp[u+1].ev.v.z;
      lpVertexG->rhw      = lpVertexG->sz * 0.125f;
      lpVertexG->color    = (int)(255-cp[u+1].ev.Light*4) * 0x00010101 | (WaterAlphaL<<24);
+	 lpVertexG->specular = (255-(int)cp[u+1].ev.Fog)<<24;//0x7F000000;
      lpVertexG->tu       = (float)(cp[u+1].tx) / (128.f*65536.f);
      lpVertexG->tv       = (float)(cp[u+1].ty) / (128.f*65536.f);
      lpVertexG++;	
@@ -1624,6 +1700,7 @@ void DrawTPlaneClip(BOOL SECONT)
      lpVertexG->sz       = -8.0f / cp[u+2].ev.v.z;
      lpVertexG->rhw      = lpVertexG->sz * 0.125f;
      lpVertexG->color    = (int)(255-cp[u+2].ev.Light*4) * 0x00010101 | (WaterAlphaL<<24);
+	 lpVertexG->specular = (255-(int)cp[u+2].ev.Fog)<<24;//0x7F000000;
      lpVertexG->tu       = (float)(cp[u+2].tx) / (128.f*65536.f);
      lpVertexG->tv       = (float)(cp[u+2].ty) / (128.f*65536.f);
      lpVertexG++;	    	 
@@ -1806,6 +1883,7 @@ void DrawTPlane(BOOL SECONT)
      lpVertexG->sz       = -8.f / ev[0].v.z;
      lpVertexG->rhw      = lpVertexG->sz * 0.125f;
      lpVertexG->color    = (int)(255-scrp[0].Light*4) * 0x00010101 | alpha1<<24;     
+	 lpVertexG->specular = (255-(int)ev[0].Fog)<<24;//0x7F000000;
      lpVertexG->tu       = (float)(scrp[0].tx) / (128.f*65536.f);
      lpVertexG->tv       = (float)(scrp[0].ty) / (128.f*65536.f);
      lpVertexG++;	
@@ -1815,6 +1893,7 @@ void DrawTPlane(BOOL SECONT)
      lpVertexG->sz       = -8.f / ev[1].v.z;
      lpVertexG->rhw      = lpVertexG->sz * 0.125f;
      lpVertexG->color    = (int)(255-scrp[1].Light*4) * 0x00010101 | alpha2<<24;     
+	 lpVertexG->specular = (255-(int)ev[1].Fog)<<24;//0x7F000000;
      lpVertexG->tu       = (float)(scrp[1].tx) / (128.f*65536.f);
      lpVertexG->tv       = (float)(scrp[1].ty) / (128.f*65536.f);
      lpVertexG++;	
@@ -1824,6 +1903,7 @@ void DrawTPlane(BOOL SECONT)
      lpVertexG->sz       = -8.f / ev[2].v.z;
      lpVertexG->rhw      = lpVertexG->sz * 0.125f;
      lpVertexG->color    = (int)(255-scrp[2].Light*4) * 0x00010101 | alpha3<<24;     
+	 lpVertexG->specular = (255-(int)ev[2].Fog)<<24;//0x7F000000;
      lpVertexG->tu       = (float)(scrp[2].tx) / (128.f*65536.f);
      lpVertexG->tv       = (float)(scrp[2].ty) / (128.f*65536.f);
      lpVertexG++;		 	      
@@ -1997,6 +2077,8 @@ void ProcessMap(int x, int y, int r)
       if (!UNDERWATER)
        if (v[0].y + MObjects[ob].info.YHi < (int)(HMap[y][x]+HMap[y+1][x+1]) / 2 * ctHScale - CameraY) return;        	  
 	        
+	  CalcFogLevel_Gradient(v[0]);
+
 	  v[0] = RotateVector(v[0]);
             
       
@@ -2108,6 +2190,7 @@ void RenderModel(TModel* _mptr, float x0, float y0, float z0, int light, float a
    int miny = 10241024;
    int maxy =-10241024;
 
+   BOOL FOGACTIVE = (FOGON && (FogYBase>0));
 
    int alphamask = (255-GlassL)<<24;
    int ml = (255-light*4);   
@@ -2115,6 +2198,15 @@ void RenderModel(TModel* _mptr, float x0, float y0, float z0, int light, float a
    TPoint3d p;
    for (int s=0; s<mptr->VCount; s++) {              
     p = mptr->gVertex[s];
+
+	if (FOGACTIVE) {
+	 vFogT[s] = 255-(int)(FogYBase + p.y * FogYGrad);
+	 if (vFogT[s]<5  ) vFogT[s] = 5;
+	 if (vFogT[s]>255) vFogT[s]=255;
+	 vFogT[s]<<=24;
+	} else vFogT[s] = 255<<24;
+
+
 		
     rVertex[s].x = (p.x * ca + p.z * sa) + x0;
 
@@ -2168,6 +2260,7 @@ void RenderModel(TModel* _mptr, float x0, float y0, float z0, int light, float a
      lpVertex->sz       = -8.f / rVertex[fptr->v1].z;
      lpVertex->rhw      = 1.f;
      lpVertex->color    = _ml * 0x00010101 | alphamask;     
+	 lpVertex->specular = vFogT[fptr->v1];
      lpVertex->tu       = (float)(fptr->tax);
      lpVertex->tv       = (float)(fptr->tay);
      lpVertex++;
@@ -2178,6 +2271,7 @@ void RenderModel(TModel* _mptr, float x0, float y0, float z0, int light, float a
      lpVertex->sz       = -8.f / rVertex[fptr->v2].z;
      lpVertex->rhw      = 1.f;
      lpVertex->color    = _ml * 0x00010101 | alphamask;;     
+	 lpVertex->specular = vFogT[fptr->v2];
      lpVertex->tu       = (float)(fptr->tbx);
      lpVertex->tv       = (float)(fptr->tby);
      lpVertex++;
@@ -2186,8 +2280,9 @@ void RenderModel(TModel* _mptr, float x0, float y0, float z0, int light, float a
 	 lpVertex->sx       = (float)gScrp[fptr->v3].x;
      lpVertex->sy       = (float)gScrp[fptr->v3].y;
      lpVertex->sz       = -8.f / rVertex[fptr->v3].z;
-     lpVertex->rhw      = 1.f;
+     lpVertex->rhw      = 1.f;	 
      lpVertex->color    = _ml * 0x00010101 | alphamask;;     
+	 lpVertex->specular = vFogT[fptr->v3];
      lpVertex->tu       = (float)(fptr->tcx);
      lpVertex->tv       = (float)(fptr->tcy);
      lpVertex++;	 
@@ -2301,6 +2396,7 @@ void RenderShadowClip(TModel* _mptr,
        lpVertex->sz       = -8.5f / cp[u].ev.v.z;
        lpVertex->rhw      = 1.f;
        lpVertex->color    = GlassL;
+	   lpVertex->specular = 0xFF000000;
        lpVertex->tu       = 0.f;
        lpVertex->tv       = 0.f;
        lpVertex++;	   
@@ -2311,6 +2407,7 @@ void RenderShadowClip(TModel* _mptr,
        lpVertex->sz       = -8.5f / cp[u].ev.v.z;
        lpVertex->rhw      = 1.f;
        lpVertex->color    = GlassL;
+	   lpVertex->specular = 0xFF000000;
        lpVertex->tu       = 0.f;
        lpVertex->tv       = 0.f;
        lpVertex++;	   
@@ -2321,6 +2418,7 @@ void RenderShadowClip(TModel* _mptr,
        lpVertex->sz       = -8.5f / cp[u].ev.v.z;
        lpVertex->rhw      = 1.f;
        lpVertex->color    = GlassL;
+	   lpVertex->specular = 0xFF000000;
        lpVertex->tu       = 0.f;
        lpVertex->tv       = 0.f;
        lpVertex++;	   	   
@@ -2362,9 +2460,18 @@ void RenderModelClip(TModel* _mptr, float x0, float y0, float z0, int light, flo
    
    
    BOOL BL = FALSE;   
+   BOOL FOGACTIVE = (FOGON && (FogYBase>0));
 
    for (int s=0; s<mptr->VCount; s++) {                  	
-	   
+
+	if (FOGACTIVE) {
+	 vFogT[s] = 255-(int)(FogYBase + mptr->gVertex[s].y * FogYGrad);
+	 if (vFogT[s]<5  ) vFogT[s] = 5;
+	 if (vFogT[s]>255) vFogT[s]=255;
+	 vFogT[s]<<=24;
+	} else vFogT[s] = 255<<24;
+
+		   
 	rVertex[s].x = (mptr->gVertex[s].x * ca + mptr->gVertex[s].z * sa) /* * mdlScale */ + x0;
     float vz = mptr->gVertex[s].z * ca - mptr->gVertex[s].x * sa;
     rVertex[s].y = (mptr->gVertex[s].y * cb - vz * sb) /* * mdlScale */ + y0;
@@ -2414,9 +2521,9 @@ void RenderModelClip(TModel* _mptr, float x0, float y0, float z0, int light, flo
     CMASK|=gScrp[fptr->v3].y;         
 
 	
-    cp[0].ev.v = rVertex[fptr->v1]; cp[0].tx = fptr->tax;  cp[0].ty = fptr->tay;  cp[0].ev.Light = mptr->VLight[fptr->v1];
-    cp[1].ev.v = rVertex[fptr->v2]; cp[1].tx = fptr->tbx;  cp[1].ty = fptr->tby;  cp[1].ev.Light = mptr->VLight[fptr->v2];
-    cp[2].ev.v = rVertex[fptr->v3]; cp[2].tx = fptr->tcx;  cp[2].ty = fptr->tcy;  cp[2].ev.Light = mptr->VLight[fptr->v3]; 
+    cp[0].ev.v = rVertex[fptr->v1]; cp[0].tx = fptr->tax;  cp[0].ty = fptr->tay; cp[0].ev.Fog = vFogT[fptr->v1]; cp[0].ev.Light = mptr->VLight[fptr->v1];
+    cp[1].ev.v = rVertex[fptr->v2]; cp[1].tx = fptr->tbx;  cp[1].ty = fptr->tby; cp[1].ev.Fog = vFogT[fptr->v2]; cp[1].ev.Light = mptr->VLight[fptr->v2];
+    cp[2].ev.v = rVertex[fptr->v3]; cp[2].tx = fptr->tcx;  cp[2].ty = fptr->tcy; cp[2].ev.Fog = vFogT[fptr->v3]; cp[2].ev.Light = mptr->VLight[fptr->v3]; 
    
 	{
      for (u=0; u<vused; u++) cp[u].ev.v.z+=16.0f;
@@ -2439,6 +2546,7 @@ void RenderModelClip(TModel* _mptr, float x0, float y0, float z0, int light, flo
          lpVertex->sz       = -8.f / cp[0].ev.v.z;
          lpVertex->rhw      = lpVertex->sz * 0.125f;
          lpVertex->color    = _flight * 0x00010101 | almask;
+		 lpVertex->specular = (int)cp[0].ev.Fog;
          lpVertex->tu       = (float)(cp[0].tx);
          lpVertex->tv       = (float)(cp[0].ty);
          lpVertex++;
@@ -2449,6 +2557,7 @@ void RenderModelClip(TModel* _mptr, float x0, float y0, float z0, int light, flo
          lpVertex->sz       = -8.f / cp[u+1].ev.v.z;
          lpVertex->rhw      = lpVertex->sz * 0.125f;
          lpVertex->color    = _flight * 0x00010101 | almask;
+		 lpVertex->specular = (int)cp[u+1].ev.Fog;
          lpVertex->tu       = (float)(cp[u+1].tx);
          lpVertex->tv       = (float)(cp[u+1].ty);
          lpVertex++;
@@ -2459,6 +2568,7 @@ void RenderModelClip(TModel* _mptr, float x0, float y0, float z0, int light, flo
          lpVertex->sz       = -8.f / cp[u+2].ev.v.z;
          lpVertex->rhw      = lpVertex->sz * 0.125f;
          lpVertex->color    = _flight * 0x00010101 | almask;
+		 lpVertex->specular = (int)cp[u+2].ev.Fog;
          lpVertex->tu       = (float)(cp[u+2].tx);
          lpVertex->tv       = (float)(cp[u+2].ty);
          lpVertex++;
@@ -2529,6 +2639,7 @@ void RenderModelSun(TModel* _mptr, float x0, float y0, float z0, int Alpha)
      lpVertex->sz       = -8.f / rVertex[fptr->v1].z;
      lpVertex->rhw      = 1.f;
      lpVertex->color    = alpha;
+	 lpVertex->specular = 0xFF000000;
      lpVertex->tu       = (float)(fptr->tax);
      lpVertex->tv       = (float)(fptr->tay);
      lpVertex++;
@@ -2538,6 +2649,7 @@ void RenderModelSun(TModel* _mptr, float x0, float y0, float z0, int Alpha)
      lpVertex->sz       = -8.f / rVertex[fptr->v2].z;
      lpVertex->rhw      = 1.f;
      lpVertex->color    = alpha;
+	 lpVertex->specular = 0xFF000000;
      lpVertex->tu       = (float)(fptr->tbx);
      lpVertex->tv       = (float)(fptr->tby);
      lpVertex++;
@@ -2547,6 +2659,7 @@ void RenderModelSun(TModel* _mptr, float x0, float y0, float z0, int Alpha)
      lpVertex->sz       = -8.f / rVertex[fptr->v3].z;
      lpVertex->rhw      = 1.f;
      lpVertex->color    = alpha;
+	 lpVertex->specular = 0xFF000000;
      lpVertex->tu       = (float)(fptr->tcx);
      lpVertex->tv       = (float)(fptr->tcy);
      lpVertex++;	 
@@ -2643,7 +2756,7 @@ void RenderModelSun(TModel* _mptr, float x0, float y0, float z0, int Alpha)
    lpd3dExecuteBuffer->Unlock( );
    
    hRes = lpd3dDevice->Execute(lpd3dExecuteBuffer, lpd3dViewport, D3DEXECUTE_UNCLIPPED);
-   if (FAILED(hRes)) DoHalt("Error execute buffer");   
+   //if (FAILED(hRes)) DoHalt("Error execute buffer");   
    dFacesCount+=fproc1;
 
 }
@@ -2658,6 +2771,9 @@ void RenderNearModel(TModel* _mptr, float x0, float y0, float z0, int light, flo
    BOOL b = LOWRESTX;
    Vector3d v;
    v.x = 0; v.y =-128; v.z = 0;   
+
+   CalcFogLevel_Gradient(v);   
+   FogYGrad = 0;
       
    LOWRESTX = FALSE;
    RenderModelClip(_mptr, x0, y0, z0, light, al, bt);
@@ -2806,6 +2922,9 @@ void Render3DHardwarePosts()
       int ri = -1 + (int)(r / 256.f + 0.5f);
       if (ri < 0) ri = 0;
       if (ri > ctViewR) continue;
+
+	  if (FOGON) 
+	   CalcFogLevel_Gradient(cptr->rpos);	  	  	          	  
 	  
       cptr->rpos = RotateVector(cptr->rpos);
 
@@ -2847,6 +2966,8 @@ void Render3DHardwarePosts()
    int ri = -1 + (int)(r / 256.f + 0.2f);
    if (ri < 0) ri = 0;
    if (ri < ctViewR) {	  
+	  if (FOGON) 
+	   CalcFogLevel_Gradient(Ship.rpos);	  	  	   
 
       Ship.rpos = RotateVector(Ship.rpos);
       if (Ship.rpos.z > BackViewR) goto NOSHIP;
@@ -3108,7 +3229,11 @@ void RenderSkyPlane()
     lpVertex->sy       = (float)sky;
     lpVertex->sz       = 0.0001f;//-8.f / za;
     lpVertex->rhw      = -1.f / za;
-    lpVertex->color    = 0x00FFFFFF | alpha<<24;
+	if (FOGENABLE) {
+     lpVertex->color    = 0xFFFFFFFF;
+	 lpVertex->specular = alpha<<24;               } else {
+	 lpVertex->color    = 0x00FFFFFF | alpha<<24;
+	 lpVertex->specular = 0xFF000000;              }
     lpVertex->tu       = (fxa + dtt) / 256.f;
     lpVertex->tv       = (fya - dtt) / 256.f;
     lpVertex++;
@@ -3117,7 +3242,11 @@ void RenderSkyPlane()
     lpVertex->sy       = (float)sky;
     lpVertex->sz       = 0.0001f;//-8.f / za;
     lpVertex->rhw      = -1.f / za;
-    lpVertex->color    = 0x00FFFFFF | alpha<<24;
+    if (FOGENABLE) {
+     lpVertex->color    = 0xFFFFFFFF;
+	 lpVertex->specular = alpha<<24;               } else {
+	 lpVertex->color    = 0x00FFFFFF | alpha<<24;
+	 lpVertex->specular = 0xFF000000;              }
     lpVertex->tu       = (fxb + dtt) / 256.f;
     lpVertex->tv       = (fyb - dtt) / 256.f;
     lpVertex++;           
@@ -3137,7 +3266,11 @@ void RenderSkyPlane()
     lpVertex->sy       = (float)sky;
     lpVertex->sz       = 0.0001f;//-8.f / zb;
     lpVertex->rhw      = -1.f / zb;
-    lpVertex->color    = 0x00FFFFFF | alphb<<24;
+    if (FOGENABLE) {
+     lpVertex->color    = 0xFFFFFFFF;
+	 lpVertex->specular = alphb<<24;               } else {
+	 lpVertex->color    = 0x00FFFFFF | alphb<<24;
+	 lpVertex->specular = 0xFF000000;              }
     lpVertex->tu       = (fxa + dtt) / 256.f;
     lpVertex->tv       = (fya - dtt) / 256.f;
     lpVertex++;
@@ -3146,7 +3279,11 @@ void RenderSkyPlane()
     lpVertex->sy       = (float)sky;
     lpVertex->sz       = 0.0001f;//-8.f / zb;
     lpVertex->rhw      = -1.f / zb;
-    lpVertex->color    = 0x00FFFFFF | alphb<<24;
+    if (FOGENABLE) {
+     lpVertex->color    = 0xFFFFFFFF;
+	 lpVertex->specular = alphb<<24;               } else {
+	 lpVertex->color    = 0x00FFFFFF | alphb<<24;
+	 lpVertex->specular = 0xFF000000;              }
     lpVertex->tu       = (fxb + dtt) / 256.f;
     lpVertex->tv       = (fyb - dtt) / 256.f;
     lpVertex++;           
@@ -3168,7 +3305,11 @@ void RenderSkyPlane()
     lpVertex->sy       = (float)sky;
     lpVertex->sz       = 0.0001f;//-8.f / zb;
     lpVertex->rhw      = -1.f / zc;
-    lpVertex->color    = 0x00FFFFFF | alphc<<24;
+    if (FOGENABLE) {
+     lpVertex->color    = 0xFFFFFFFF;
+	 lpVertex->specular = alphc<<24;               } else {
+	 lpVertex->color    = 0x00FFFFFF | alphc<<24;
+	 lpVertex->specular = 0xFF000000;              }
     lpVertex->tu       = (fxa + dtt) / 256.f;
     lpVertex->tv       = (fya - dtt) / 256.f;
     lpVertex++;
@@ -3177,7 +3318,11 @@ void RenderSkyPlane()
     lpVertex->sy       = (float)sky;
     lpVertex->sz       = 0.0001f;//-8.f / zb;
     lpVertex->rhw      = -1.f / zc;
-    lpVertex->color    = 0x00FFFFFF | alphc<<24;
+    if (FOGENABLE) {
+     lpVertex->color    = 0xFFFFFFFF;
+	 lpVertex->specular = alphc<<24;               } else {
+	 lpVertex->color    = 0x00FFFFFF | alphc<<24;
+	 lpVertex->specular = 0xFF000000;              }
     lpVertex->tu       = (fxb + dtt) / 256.f;
     lpVertex->tv       = (fyb - dtt) / 256.f;
     lpVertex++;           
@@ -3270,6 +3415,7 @@ void RenderFSRect(DWORD Color)
     lpVertex->sz       = 0.999f;
     lpVertex->rhw      = 1.f;
     lpVertex->color    = Color;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3279,6 +3425,7 @@ void RenderFSRect(DWORD Color)
     lpVertex->sz       = 0.999f;
     lpVertex->rhw      = 1.f;
     lpVertex->color    = Color;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3288,6 +3435,7 @@ void RenderFSRect(DWORD Color)
     lpVertex->sz       = 0.999f;
     lpVertex->rhw      = 1.f;
     lpVertex->color    = Color;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3297,6 +3445,7 @@ void RenderFSRect(DWORD Color)
     lpVertex->sz       = (float)0.999f;
     lpVertex->rhw      = 1.f;
     lpVertex->color    = Color;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3362,7 +3511,7 @@ void RenderFSRect(DWORD Color)
 
 void RenderHealthBar()
 {
-	
+
   if (MyHealth >= 100000) return;
   if (MyHealth == 000000) return;
 
@@ -3382,18 +3531,20 @@ void RenderHealthBar()
   for (int y=0; y<4; y++) {	  
 	lpVertex->sx       = (float)x0-1;
     lpVertex->sy       = (float)y0+y;
-    lpVertex->sz       = 0.99999f;
+    lpVertex->sz       = 0.9999f;
     lpVertex->rhw      = 1.f;
-    lpVertex->color    = 0x80000010;
+    lpVertex->color    = 0xF0000010;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
 
 	lpVertex->sx       = (float)x0+L0+1;
     lpVertex->sy       = (float)y0+y;
-    lpVertex->sz       = 0.99999f;
+    lpVertex->sz       = 0.9999f;
     lpVertex->rhw      = 1.f;
-    lpVertex->color    = 0x80000010;
+    lpVertex->color    = 0xF0000010;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3404,7 +3555,8 @@ void RenderHealthBar()
     lpVertex->sy       = (float)y0+y;
     lpVertex->sz       = 0.99999f;
     lpVertex->rhw      = 1.f;
-    lpVertex->color    = 0x80000000 + (G<<8) + (R<<16);
+    lpVertex->color    = 0xF0000000 + (G<<8) + (R<<16);
+	lpVertex->specular = 0xFF000000;// + (G<<8) + (R<<16);
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3413,7 +3565,8 @@ void RenderHealthBar()
     lpVertex->sy       = (float)y0+y;
     lpVertex->sz       = 0.99999f;
     lpVertex->rhw      = 1.f;
-    lpVertex->color    = 0x80000000 + (G<<8) + (R<<16);
+    lpVertex->color    = 0xF0000000 + (G<<8) + (R<<16);
+	lpVertex->specular = 0xFF000000;// + (G<<8) + (R<<16);
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3445,7 +3598,6 @@ void RenderHealthBar()
    lpProcessVertices->dwCount    = 12;
    lpProcessVertices->dwReserved = 0UL;
    lpProcessVertices++;
-
    
    lpInstruction = (LPD3DINSTRUCTION)lpProcessVertices;
    lpInstruction->bOpcode = D3DOP_LINE;
@@ -3484,6 +3636,7 @@ void Render_Cross(int sx, int sy)
     lpVertex->sz       = 0.99999f;
     lpVertex->rhw      = 1.f;
     lpVertex->color    = 0x80000010;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3493,6 +3646,7 @@ void Render_Cross(int sx, int sy)
     lpVertex->sz       = 0.99999f;
     lpVertex->rhw      = 1.f;
     lpVertex->color    = 0x80000010;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3503,6 +3657,7 @@ void Render_Cross(int sx, int sy)
     lpVertex->sz       = 0.99999f;
     lpVertex->rhw      = 1.f;
     lpVertex->color    = 0x80000010;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;
@@ -3513,6 +3668,7 @@ void Render_Cross(int sx, int sy)
     lpVertex->sz       = 0.99999f;
     lpVertex->rhw      = 1.f;
     lpVertex->color    = 0x80000010;
+	lpVertex->specular = 0xFF000000;
     lpVertex->tu       = 0;
     lpVertex->tv       = 0;
     lpVertex++;

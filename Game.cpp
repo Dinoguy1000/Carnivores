@@ -411,7 +411,7 @@ void InitEngine()
     SKY          = TRUE;
     GOURAUD      = TRUE;   
     MODELS       = TRUE;   
-    TIMER        = TRUE;
+    //TIMER        = TRUE;
     BITMAPP      = FALSE;
     MIPMAP       = TRUE;
     NOCLIP       = FALSE;
@@ -500,7 +500,7 @@ void InitEngine()
 	FULLSCREEN = TRUE;
     MenuState = -1;
     
-    MenuState = 0;
+//    MenuState = 0;
     TrophyRoom.RegNumber=0;
 	LoadTrophy();
 

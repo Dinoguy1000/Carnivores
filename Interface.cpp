@@ -102,7 +102,8 @@ void InitDirectDraw()
    }
    PrintLog("DirectDrawCreate: Ok\n");
 
-   
+
+
 /*
    hres = lpDD->QueryInterface( IID_IDirectDraw2, (LPVOID *)&lpDD2);
    if( hres != DD_OK ) {
@@ -245,8 +246,12 @@ void SetVideoMode(int W, int H)
 
 void SetMenuVideoMode()
 {   
-   HRESULT hres = lpDD->SetDisplayMode( 800, 600, 16);              
-   if (hres != DD_OK)	 
+   HRESULT hres = lpDD->SetDisplayMode( 800, 600, 16);
+   if (hres != DD_OK) hres = lpDD->SetDisplayMode( 800, 600, 24);
+   if (hres != DD_OK) hres = lpDD->SetDisplayMode( 800, 600, 32);
+   if (hres != DD_OK) hres = lpDD->SetDisplayMode( 800, 600, 8);
+   
+   if (hres != DD_OK) 
      PrintLog("DDRAW: Error setting menu mode\n");
 
    SetWindowPos(hwndMain, HWND_TOP, 0, 0, 800, 600, SWP_SHOWWINDOW);

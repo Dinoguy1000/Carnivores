@@ -698,8 +698,7 @@ void DrawTrophyText(int x0, int y0)
 	SmallFont = TRUE;
     HFONT oldfont = SelectObject(hdcMain, fnt_Small);  
 	int tc = TrophyBody;
-	//int dtype = Characters[TrophyBody].CType;	
-	//int   tc = Characters[TrophyBody].State;
+
 	int   dtype = TrophyRoom.Body[tc].ctype;
 	int   time  = TrophyRoom.Body[tc].time;
 	int   date  = TrophyRoom.Body[tc].date;

@@ -880,7 +880,7 @@ void GenerateMapImage()
 	if (t) c = Textures[t]->DataC[(y & 31)*32+(x&31)];
 	  else c = Textures[t]->DataD[(y & 15)*16+(x&15)];
     if (!HARD3D) c=c>>1; else c=conv_565(c);
-	*((WORD*)MapPic.lpImage + (y+YShift)*lsw + x + XShift) = c;		
+	*((WORD*)MapPic.lpImage + (y+YShift)*lsw + x + XShift) = c;
    }
 }
 
@@ -912,7 +912,6 @@ void ReleaseResources()
 		MObjects[m].vtl.FramesCount = 0;
      } else break;
     }
-
 	
 	for (int a=0; a<255; a++) {
 	  if (!Ambient[a].sfx.lpData) break;
@@ -1487,7 +1486,7 @@ void CreateLog()
 					   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
 #ifdef _d3d
-	PrintLog("Carnivores D3D. Build v1.03. Dec. 15 1998.\n");
+	PrintLog("Carnivores D3D. Build v1.03. Dec. 18 1998.\n");
 #endif
 
 #ifdef _3dfx

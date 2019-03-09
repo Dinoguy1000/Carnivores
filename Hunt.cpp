@@ -915,7 +915,7 @@ LONG APIENTRY MainWndProc( HWND hWnd, UINT message, UINT wParam, LONG lParam)
 		  case 'Y':
           case VK_RETURN: 
 			  if (GameState && EXITMODE ) {
-				  if (MyHealth) ExitTime = 1; else ExitTime = 1;				  			  				  
+				  if (MyHealth) ExitTime = 4000; else ExitTime = 1;				  			  				  
 				  EXITMODE = FALSE;
 			  }
               break;
